@@ -1,0 +1,68 @@
+<?php
+
+define('APPCLIENT_ACCESS_CONFIG', 'applclient config');
+define('APPCLIENT_ACCESS_INSTALL', 'appclient install');
+
+define('APPSERVER_API_URL', 'http://d/app/fulfill'); // Deal with https if available.
+
+function appclient_menu() {
+  $items['admin/appclient/add'] = array(
+    'title' => 'Install or Update an App',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('appclient_add'),
+    'access arguments' => array(APPCLIENT_ACCESS_INSTALL),
+  );
+  return $items;
+}
+
+function appclient_permission() {
+  return array(
+    APPCLIENT_ACCESS_CONFIG => array(
+      'title' => t('Configure apps'),
+    ),
+    APPCLIENT_ACCESS_INSTALL => array(
+      'title' => t('Install/Update apps'), // Maybe separate these? What about purchase?
+    ),
+  );
+}
+
+function appclient_add($form, &$form_state) {
+  $form['code'] = array(
+    '#title' => t('Purchase code'),
+    '#type' => 'textfield',
+  );
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Submit'),
+  );
+  return $form;
+}
+
+// Get system_list().
+// Send system_list and purchase code to app server
+// App server replies with customized tarball or zip
+// Copy tarball from appserver to drupal tmp dir
+// Show move command for putting it in sites/all/modules
+// Offer an Enable button for enabling the app components
+// Redirect to features control panel.
+function appclient_add_submit($form, &$form_state) {
+  $values = $form_state['values'];
+  $system_list = array(
+    'theme' => system_list('theme'),
+    'module_enabled' => system_list('module_enabled'),
+  );
+  $data = $system_list + array(
+    'purchase_code' => $values['purchase_code'],
+  );
+  //foreach ($data as $key => $value) {
+  //  $pairs[] = "$key=" . json_encode($value);
+  //}
+  $options = array(
+    // 'headers' => array('Content-Type' => 'application/json'),
+    'method' => 'POST',
+    'data' => json_encode($data),
+  );
+  $return = drupal_http_request(APPSERVER_API_URL, $options); // deal with API version.
+
+  // $form_state['redirect'] = 'foo';
+}

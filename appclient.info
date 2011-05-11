@@ -1,0 +1,4 @@
+name = "App client"
+description = "App UI and tools"
+package = "App Airplane"
+core = 7.x
