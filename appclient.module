@@ -1,17 +1,32 @@
 <?php
 
+// Constants for permissions. Protects against typos.
 define('APPCLIENT_ACCESS_CONFIG', 'applclient config');
 define('APPCLIENT_ACCESS_INSTALL', 'appclient install');
 
-define('APPSERVER_API_URL', 'http://d/app/fulfill'); // Deal with https if available.
+// @TODO: move this to config.
+define('APPSERVER_API', 'http://d/app'); // Deal with https if available.
 
 function appclient_menu() {
+  $items['admin/appclient'] = array(
+    'title' => 'App Airplane',
+    'page callback' => 'appclient_page',
+    'access arguments' => array(APPCLIENT_ACCESS_CONFIG),
+  );
   $items['admin/appclient/add'] = array(
     'title' => 'Install or Update an App',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('appclient_add'),
+    'type' => MENU_LOCAL_TASK,
     'access arguments' => array(APPCLIENT_ACCESS_INSTALL),
   );
+  //$items['admin/appclient/enable'] = array(
+  //  'title' => 'Enable your App',
+  //  'page callback' => 'drupal_get_form',
+  //  'page arguments' => array('appclient_enable'),
+  //  'access arguments' => array(APPCLIENT_ACCESS_INSTALL),
+  //  'type' => MENU_CALLBACK,
+  //);
   return $items;
 }
 
@@ -26,7 +41,22 @@ function appclient_permission() {
   );
 }
 
+function appclient_page() {
+  return 'coming soon';
+}
+
 function appclient_add($form, &$form_state) {
+  if (!module_exists('update')) {
+    // TODO: More descriptive
+    drupal_set_message(t('Update module must be enabled. '), 'error');
+    return;
+  }
+  if (0) {
+    // TODO: tell people what to do.
+    drupal_set_error('Sites directory must be writable', 'error');
+    return;
+  }
+
   $form['code'] = array(
     '#title' => t('Purchase code'),
     '#type' => 'textfield',
@@ -42,27 +72,113 @@ function appclient_add($form, &$form_state) {
 // Send system_list and purchase code to app server
 // App server replies with customized tarball or zip
 // Copy tarball from appserver to drupal tmp dir
-// Show move command for putting it in sites/all/modules
-// Offer an Enable button for enabling the app components
-// Redirect to features control panel.
+// Redirect to Enable page
 function appclient_add_submit($form, &$form_state) {
   $values = $form_state['values'];
-  $system_list = array(
-    'theme' => system_list('theme'),
-    'module_enabled' => system_list('module_enabled'),
+  $data = array(
+    // 'theme' => system_list('theme'),
+    // 'module_enabled' => system_list('module_enabled'),
+    'purchase_code' => '', //$values['purchase_code']
+    // 'os' => PHP_OS,
   );
-  $data = $system_list + array(
-    'purchase_code' => $values['purchase_code'],
-  );
-  //foreach ($data as $key => $value) {
-  //  $pairs[] = "$key=" . json_encode($value);
-  //}
   $options = array(
     // 'headers' => array('Content-Type' => 'application/json'),
     'method' => 'POST',
     'data' => json_encode($data),
   );
-  $return = drupal_http_request(APPSERVER_API_URL, $options); // deal with API version.
+  $return = drupal_http_request(APPSERVER_API . '/fulfill', $options); // deal with API version.
 
-  // $form_state['redirect'] = 'foo';
+  // TODO: More error handling.
+  if ($return->code == 200) {
+    $target = 'temporary://' . 'appclient.zip'; // Always same name?
+    if (file_put_contents($target, $return->data) === FALSE) {
+      drupal_set_message('Failed to write to Drupal temp directory. Please fix this on the <a href="!href">On the File System page.</a>', array('!href' => url('admin/config/media/file-system')), 'error');
+    }
+    else {
+      // Untar the app
+      
+
+      // Clean out older versions of projects.
+      $manifest = array(
+        'project_mapper' => array('version' => '6.x-3.21'),
+        'views' => '6.x-3.1',
+        'context' => '',
+      );
+      $local = update_get_projects();
+      foreach ($manifest as $project => $manifest_version) {
+        if (in_array($project, $local)) {
+          $local_version = $local[$project]['info']['version'];
+          if ($manifest_version > $local_version) {
+            // TODO: Figure out where this fucker is in the modules dir
+            // TODO: handle unwritable case.
+            $target = $_SERVER['DOCUMENT_ROOT'] . '/sites/all/modules/' . $project;
+            if (file_exists($target)) {
+              unlink($target);
+            }
+            copy('temporary://appclient/', $target);
+          }
+          else {
+            // Skip since local is newer. Write to log.
+          }
+        }
+      }
+
+
+
+      // Copy from temp to sites/all/modules
+      $form_state['redirect'] = 'admin/appclient/enable';
+
+      // Enable the primary module.
+
+      // Run update.php
+
+      // Redirect to Features control panel.
+
+    }
+  }
 }
+
+// Show move command for putting it in sites/all/modules
+// Offer an Enable button for enabling the app components
+// Redirect to features control panel.
+//function appclient_enable($form, &$form_state) {
+//  $tmp = drupal_realpath('temporary://appclient.zip');
+//  $dest = $_SERVER['DOCUMENT_ROOT'] . '/sites/all/modules/apps';
+//  $title = t('Move code into your Drupal site');
+//  if (is_windows()) {
+//    $items[] = t('Delete !dest', array('!dest' => $dest . '/APPNAME'));
+//    $items[] = t('Extract !archive to !dest.', array('!archive' => "$tmp/appclient.zip", '!dest' => $dest));
+//    $form['move_cli'] = array(
+//      '#title' => $title,
+//      '#theme' => 'item_list',
+//      '#items' => $items,
+//    );
+//  }
+//  else {
+//    $form['move_cli'] = array(
+//      '#title' => $title,
+//      '#type' => 'item',
+//      '#markup' => "<pre>
+//        rm -rf $dest/APPNAME
+//        tar -zxvf -C $dest $tmp
+//        </pre>",
+//    );
+//  }
+//
+//  $form['enable_title'] = array(
+//    '#title' => 'Enable App',
+//    '#type' => 'item',
+//    // '#markup' => 'Enable App',
+//  );
+//  $form['enable'] = array(
+//    // '#title' => 'Enable App',
+//    '#type' => 'submit',
+//    '#value' => t('Enable App (TODO - redirects to update.php)'),
+//  );
+//
+//  return $form;
+//}
+//
+//function is_windows() {
+//  return substr(PHP_OS, 0, 3) == 'WIN';
+//}
