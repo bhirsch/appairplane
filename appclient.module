@@ -68,11 +68,6 @@ function appclient_add($form, &$form_state) {
   return $form;
 }
 
-// Get system_list().
-// Send system_list and purchase code to app server
-// App server replies with customized tarball or zip
-// Copy tarball from appserver to drupal tmp dir
-// Redirect to Enable page
 function appclient_add_submit($form, &$form_state) {
   $values = $form_state['values'];
   $data = array(
@@ -96,9 +91,8 @@ function appclient_add_submit($form, &$form_state) {
     }
     else {
       // Untar the app
-      
 
-      // Clean out older versions of projects.
+
       $manifest = array(
         'project_mapper' => array('version' => '6.x-3.21'),
         'views' => '6.x-3.1',
@@ -109,6 +103,7 @@ function appclient_add_submit($form, &$form_state) {
         if (in_array($project, $local)) {
           $local_version = $local[$project]['info']['version'];
           if ($manifest_version > $local_version) {
+            // Clean out older versions of projects.
             // TODO: Figure out where this fucker is in the modules dir
             // TODO: handle unwritable case.
             $target = $_SERVER['DOCUMENT_ROOT'] . '/sites/all/modules/' . $project;
@@ -123,14 +118,14 @@ function appclient_add_submit($form, &$form_state) {
         }
       }
 
+      // Enable primary module (a no-op) if this is already enabled
+      // module_enable($TODO);
 
 
+      // TODO: check core code to look for example of checking if there are pending updates.
+      drupal_set_message(t('Thanks for downloading a new app. Please update your database'));
       // Copy from temp to sites/all/modules
-      $form_state['redirect'] = 'admin/appclient/enable';
-
-      // Enable the primary module.
-
-      // Run update.php
+      $form_state['redirect'] = 'update.php';
 
       // Redirect to Features control panel.
 
