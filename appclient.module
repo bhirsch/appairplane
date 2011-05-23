@@ -51,10 +51,13 @@ function appclient_add($form, &$form_state) {
     drupal_set_message(t('Update module must be enabled. '), 'error');
     return;
   }
-  if (0) {
+  if (!is_writable(conf_path())) {
     // TODO: tell people what to do.
-    drupal_set_error('Sites directory must be writable', 'error');
-    return;
+    drupal_set_message('Your Sites directory is not writable by the web server. Please make it writable, or download and install your Apps manually.', 'error');
+  }
+  if (!is_writable('temporary://')) {
+    // TODO: tell people what to do.
+    drupal_set_message('Drupal\'s temporary directory is not writeable. Please fix this on the <a href="!href">On the File System page.</a>', array('!href' => url('admin/config/media/file-system')), 'error');
   }
 
   $form['code'] = array(
@@ -85,51 +88,67 @@ function appclient_add_submit($form, &$form_state) {
 
   // TODO: More error handling.
   if ($return->code == 200) {
-    $target = 'temporary://' . 'appclient.zip'; // Always same name?
-    if (file_put_contents($target, $return->data) === FALSE) {
-      drupal_set_message('Failed to write to Drupal temp directory. Please fix this on the <a href="!href">On the File System page.</a>', array('!href' => url('admin/config/media/file-system')), 'error');
+    $appname = $return->headers['x-fulfill-name'];
+    $tarball = 'temporary://appclient/' . "$appname.tar.gz";
+    file_put_contents($tarball, $return->data);
+
+    // Untar the app.
+    module_load_include('inc', 'update', 'update.manager');
+    $extract_directory = _update_manager_extract_directory();
+    try {
+      update_manager_archive_extract($tarball, $extract_directory);
     }
-    else {
-      // Untar the app
+    catch (Exception $e) {
+      drupal_set_message($e->getMessage(), 'error');
+      return FALSE;
+    }
 
 
-      $manifest = array(
-        'project_mapper' => array('version' => '6.x-3.21'),
-        'views' => '6.x-3.1',
-        'context' => '',
-      );
-      $local = update_get_projects();
-      foreach ($manifest as $project => $manifest_version) {
-        if (in_array($project, $local)) {
-          $local_version = $local[$project]['info']['version'];
-          if ($manifest_version > $local_version) {
-            // Clean out older versions of projects.
-            // TODO: Figure out where this fucker is in the modules dir
-            // TODO: handle unwritable case.
-            $target = $_SERVER['DOCUMENT_ROOT'] . '/sites/all/modules/' . $project;
-            if (file_exists($target)) {
-              unlink($target);
-            }
-            copy('temporary://appclient/', $target);
+    require $extract_directory . "/$appname.make";
+    $primary = current($projects);
+
+    $manifest = array(
+      'project_mapper' => array('version' => '6.x-3.21'),
+      'views' => '7.x-4.1',
+      'context' => '',
+    );
+    $local = update_get_projects();
+    foreach ($projects as $project_name => $project) {
+      $manifest_version = key($project);
+      if (isset($local[$project_name])) {
+        $local_version = $local[$project_name]['info']['version'];
+        if ($manifest_version > $local_version) {
+          // Clean out older versions of projects.
+          // TODO: Figure out where this fucker is in the modules dir
+          // TODO: handle unwritable case.
+          $target = drupal_realpath('./') . '/sites/all/modules/' . $project_name;
+          if (file_exists($target)) {
+            $removed = file_unmanaged_delete_recursive($target);
           }
-          else {
-            // Skip since local is newer. Write to log.
-          }
+          $renamed = rename(drupal_realpath($extract_directory), $target);
+        }
+        else {
+          // Skip since local is newer. Write to log.
         }
       }
+    }
 
-      // Enable primary module (a no-op) if this is already enabled
-      // module_enable($TODO);
+    // Enable primary module (a no-op) if this is already enabled
+    module_enable($primary);
 
 
-      // TODO: check core code to look for example of checking if there are pending updates.
-      drupal_set_message(t('Thanks for downloading a new app. Please update your database'));
+    require_once DRUPAL_ROOT . '/includes/update.inc';
+    if (update_get_update_list()) {
+      drupal_set_message(t('Thanks for downloading a new app. Please update your database. After updating, please visit your Features Control Panel.'));
       // Copy from temp to sites/all/modules
       $form_state['redirect'] = 'update.php';
-
-      // Redirect to Features control panel.
-
     }
+
+    // Redirect to Features control panel.
+
+  }
+  else {
+    drupal_set_message('Unable to download your App. ***** TODO ******.', 'error');
   }
 }
 
