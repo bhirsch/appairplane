@@ -1,0 +1,32 @@
+/* appui.css */
+
+.appcontrol-title 
+{
+  float:left;
+  width:250px;
+}
+
+.appcontrol-description { font-size: 85%; } 
+.appcontrol { border-bottom:solid 3px #F4F4F4; }
+
+/**
+ * Customize Ctools Export UI: admin/build/appui ===================
+ */
+
+table.appui-admin td.package { font-style:italic; }
+
+table.appui-admin td.ctools-export-ui-name {
+  width:75%;
+  padding-left:20px;
+  }
+
+table.appui-admin td.ctools-export-ui-operations { white-space:nowrap; }
+
+table.appui-admin td.ctools-export-ui-storage { color:#999; }
+
+table.appui-admin div.description {
+  padding-left:10px;
+  margin:0px;
+  }
+
+table.appui-admin input.form-text { width:90%; }

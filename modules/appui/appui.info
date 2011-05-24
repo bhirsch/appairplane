@@ -1,0 +1,12 @@
+name = App UI
+description = Provide end-users a single control panel for all the features on their webiste. 
+core = 7.x
+version = "7.x-1.0"
+package = "App Airplane"
+project = "App UI"
+
+files[] = appui.install
+files[] = appui.module
+files[] = appui.page.inc
+files[] = export_ui/appui_ctools_export_ui.inc
+files[] = export_ui/appui_export_ui.class.php

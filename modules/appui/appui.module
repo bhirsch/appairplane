@@ -1,0 +1,554 @@
+<?php
+/**
+ * @file appui.module
+ */
+
+//--------------------------------//
+// core Drupal hooks              //
+//--------------------------------//
+
+/**
+ * Implements hook_help().
+ */
+function appui_help($path, $arg) {
+  if ($path == 'admin/help#appui') {
+    $txt = 'Features Control Panel';
+    $output = t($txt);
+    return $output;
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function appui_menu() {
+  $items['admin/structure/appui/%/export'] = array(
+    'title' => 'export',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('appui_export_appcontrol', 3),
+    'access arguments' => array('appui export'),
+    'type' => MENU_CALLBACK,
+  );
+  $site_name = variable_get('site_name', NULL);
+  $items['admin/appui'] = array(
+    'title' => t('Control Panel'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('appui_page'),
+    'access arguments' => array('access features control panel'),
+    'file' => 'appui.page.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function appui_permission() {
+  return array(
+    'access features control panel' => array(
+      'title' => t('access features control panel'),
+      'description' => t('Grant access to Control Panel.'),
+    ),
+    'appui export' => array(
+      'title' => t('appui export'),
+      'description' => t('Permission to export Control Panel controls.'),
+    ),
+    'administer appui' => array(
+      'title' => t('administer appui'),
+      'description' => t('Create new control panel controls.'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_modules_enabled().
+ *
+ * Check for appcontrol objects. If there are any, and Admin Toolbar
+ * is installed, add them to the Admin Toolbar.
+ */
+function appui_modules_enabled($modules) {
+  foreach ($modules as $module) {
+    $path = drupal_get_path('module', $module) . "/$module.info";
+    $info = drupal_parse_info_file($path);
+    if ($appcontrols = $info['features']['appui_appcontrol']) {
+      if (module_exists('admin') && variable_get('appui_admin', TRUE)) {
+        $admin_toolbar = admin_get_settings();
+        foreach ($appcontrols as $appcontrol_name) {
+          $appcontrol = appui_appcontrol_load($appcontrol_name);
+          $name = appui_package_name($appcontrol->package);
+          // Check if block is already on admin toolbar.
+          $block_name = 'appui-' . $name;
+          if (!$result = array_key_exists($block_name, $admin_toolbar['blocks'])) {
+            // Add block to Admin Toolbar.
+            $admin_toolbar['blocks'][$block_name] = 1;
+          }
+        }
+        variable_set('admin_toolbar', $admin_toolbar);
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_modules_disabled().
+ *
+ * Check for appcontrol objects. If there are any, remove them
+ * from the Admin Toolbar.
+ */
+function appui_modules_disabled($modules) {
+  // Figure out if disabled module has appcontrols.
+  foreach ($modules as $module) {
+    $path = drupal_get_path('module', $module) . "/$module.info";
+    $info = drupal_parse_info_file($path);
+    if ($appcontrols = $info['features']['appui_appcontrol']) {
+      if (module_exists('admin')) {
+        foreach ($appcontrols as $appcontrol_name) {
+
+          // Identify any orphaned appui blocks in Admin Toolbar to remove.
+          $packages = appui_get_packages();
+          $package_names = array();
+          foreach ($packages as $package) {
+            $package_names[] = $package['package_name'];
+          }
+          $admin_toolbar = variable_get('admin_toolbar', NULL);
+          $remove = array();
+          foreach ($admin_toolbar['blocks'] as $block_name => $value) {
+            foreach ($admin_toolbar['blocks'] as $block_name => $value) {
+              if (substr($block_name, 0, 14) == 'appui-') {
+                $name = substr($block_name, 14);
+                if (!in_array($name, $package_names)) { // It's an orphan.
+                  $remove[] = $block_name;
+                }
+              }
+            }
+          }
+
+          // Remove orphans.
+          if ($remove) {
+            foreach ($remove as $orphan) {
+              unset($admin_toolbar['blocks'][$orphan]);
+            }
+            variable_set('admin_toolbar', $admin_toolbar);
+          }
+
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function appui_form_alter(&$form, &$form_state, $form_id) {
+  // @todo goto doesn't work on user_login_block
+  //if ($form_id == 'user_login' || $form_id == 'user_login_block') {
+  if ($form_id == 'user_login') {
+    // Access control and $form_state['#redirect'] = 'admin/appui' doesn't work
+    // here because the user's status changes from anonymous to [role]
+    // after they successfully log in.
+    $form['#submit'][] = 'appui_goto_appui';
+  }
+}
+// */
+
+/**
+ * Implements hook_theme().
+ */
+function appui_theme() {
+  return array(
+    'appui_appcontrol' => array(
+      'render element' => 'element',
+    ),
+    'appui_admin_block' => array(
+      'variables' => array('package' => NULL),
+    ),
+    'appui_admin_tabs' => array(
+      'variables' => array('count' => NULL),
+    ),
+  );
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function appui_block_info() {
+  $packages = appui_get_packages();
+  theme('appui_admin_tabs', array('count' => count($packages))); //todo temp, handle additional tabs
+  foreach ($packages as $n => $package) {
+    $title = check_plain($package['package_title']);
+    $name = check_plain($package['package_name']);
+    $blocks[$name]['info'] = ($package['disabled']) ? $title . t(' DISABLED') : $title;
+    $blocks[$name]['admin'] = ($package['disabled']) ? NULL : TRUE;
+    $blocks[$name]['cache'] = DRUPAL_CACHE_PER_ROLE;
+  }
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function appui_block_view($delta) {
+  $packages = appui_get_packages();
+  if ($packages[$delta] && !$packages[$delta]['disabled']) {
+    $package = $packages[$delta];
+    $block['subject'] = t(check_plain($package['package_title']));
+    $block['content'] = theme('appui_admin_block', array('package' => $package));
+    return $block;
+  }
+}
+
+/**
+ * Implement theme_appui_admin_tabs().
+ *
+ * Make Admin Toolbar taller when tabs don't fit
+ * horizontal toolbar.
+ *
+ * 996px fixed width
+ * 9 tabs = 1 row, 30px
+ * +9 tabs =  2rows, 50px
+ *
+ * @todo This would be better handled inside admin module.
+ *      Write and submit a patch to help admin module
+ *      handle additional horizontal tabs.
+ */
+function theme_appui_admin_tabs($variables) {
+  $count = $variables['count'];
+  if ($count > 9) {
+    $admin_toolbar = variable_get('admin_toolbar', NULL);
+    if ($admin_toolbar['layout'] == 'horizontal') {
+      $path = drupal_get_path('module', 'appui');
+      drupal_add_css("$path/appui.admin.css");
+    }
+  }
+}
+
+/**
+ * Implement theme_appui_admin_block.
+ *
+ * Each package (feature set) gets a corresponding block
+ * for the admin module's admin toolbar.
+ *
+ * @param $variables
+ *  - $variables['package'] is an array. It includes all the appcontrol objects
+ *    in the package.
+ *
+ * @return $output
+ *  string, HTML for block content.
+ *
+ * @todo: Consider making packages into real menus.
+ */
+function theme_appui_admin_block($variables) {
+  $package = $variables['package'];
+  $output = '';
+  $output .= '<ul class="menu">';
+
+  // Build array of list items, but don't
+  // add to $output before sorting by weight.
+  $lis = array();
+  foreach ($package['appcontrols'] as $appcontrol) {
+    // Info for building list items:
+    $txt = t($appcontrol->title);
+    $path = $appcontrol->path;
+    $query = _appui_query($appcontrol);
+    $perm = (property_exists($appcontrol, 'permission') && $appcontrol->permission != NULL) ? $appcontrol->permission : 'access features control panel';
+    // Info for sorting list items:
+    $weight = (property_exists($appcontrol, 'weight') && $appcontrol->weight != NULL) ? $appcontrol->weight : 0;
+    $name = $appcontrol->name;
+    $key = $weight . '-' . $name;
+    if (user_access($perm)) {
+      $link = ($query) ? l($txt, $path, array('query' => $query)) : l($txt, $path);
+      $lis[$key] = '<li class="leaf">' . $link . '</li>';
+    }
+  }
+  // Sort by $key.
+  ksort($lis);
+  // Add <li>'s to output
+  foreach ($lis as $li) {
+    $output .= $li;
+  }
+
+  $output .= '</ul>';
+
+  return $output;
+}
+
+//----------------------------------------------//
+// appui                                //
+//----------------------------------------------//
+
+/**
+ * Turn a simple query string into an array.
+ *
+ * @param $appcontrol
+ *  object, appcontrol
+ *
+ * @return $query
+ *  array, $query = array( 'x' => 'y', 'a' => 'b' )
+ */
+function _appui_query($appcontrol) {
+  if ($query = $appcontrol->query) {
+    // Process query string, break key/value pairs like this, 'x=y&a=b'
+    // into an array like this, $query = array( 'x' => 'y', 'a' => 'b' )
+    $query = array();
+    $pairs = explode('&', $appcontrol->query);
+    foreach ($pairs as $pair) {
+      $q = explode('=', $pair);
+      $key = check_plain($q[0]);
+      $value = check_plain($q[1]);
+      $query[$key] = $value;
+    }
+    return $query;
+  }
+  else {
+    return FALSE;
+  }
+}
+
+/**
+ * @param $package_title
+ *  string, package name
+ *
+ * @return $name
+ *  string, machine name
+ */
+function appui_package_name($package_title) {
+  $package = strtolower(preg_replace('/[^a-zA-Z0-9-]+/', '-', $package_title));
+  $package = check_plain($package);
+  return $package;
+}
+
+/**
+ * @return $packages
+ *  array, appcontrols organized by package
+ *
+ * $packages[$package_name]['package_name'] = package name
+ * $packages[$package_name]['package_title'] = $package_title;
+ * $packages[$package_name]['appcontrols'][$appcontrol]
+ */
+function appui_get_packages() {
+  ctools_include('export');
+  $appcontrols = ctools_export_load_object('appui_appcontrol');
+  // Make a unique list of packages;
+  foreach ($appcontrols as $appcontrol) {
+    $package_title = check_plain($appcontrol->package);
+    $package = appui_package_name($package_title);
+    $list[$package] = $package_title;
+  }
+  // Sort package list in alphabetical order by $package_title.
+  // This is particularly important for making hook_block $delta
+  // values correspond with aphabetical order for Admin Toolbar.
+  asort($list);
+  // Number packages.
+  $packages = array();
+  foreach ($list as $package => $package_title) {
+    $packages[$package]['package_name'] = $package;
+    $packages[$package]['package_title'] = $package_title;
+    $packages[$package]['disabled'] = TRUE;
+    // Organize appcontrols by package.
+    foreach ($appcontrols as $appcontrol) {
+      if ($appcontrol->package == $package_title) {
+        $packages[$package]['appcontrols'][] = $appcontrol;
+        // At least one control per package needs to be
+        // enabled (not disabled) for the package to be
+        // enabled (not disabled).
+        if (!property_exists($appcontrol, 'disabled')) {
+          // This property is created and set by Ctools.
+          // If the control is stored in database and is enabled, the property
+          // doesn't exist and throws an error.
+          $packages[$package]['disabled'] = FALSE;
+        }
+        else { // $appcontrol->disabled does exist
+          if (!$appcontrol->disabled) {
+            $packages[$package]['disabled'] = FALSE;
+          }
+        }
+      }
+    }
+    // default, sort alphabetical (handle sort by weight elsewhere)
+    sort($packages[$package]['appcontrols']);
+  }
+
+  return $packages;
+}
+
+/**
+ * @param $status
+ *  string, 'enable' or 'disable'
+ *
+ * This function is responsible for updating the admin module's
+ * administrative toolbar to include appui blocks.
+ *
+ * Features Control Panel features modules should call this
+ * function on hook_enable() and hook_disable().
+ *
+ * If Admin module is enabled, all appui blocks
+ * should be automatically added to the toolbar when Features Control Panel
+ * features are enabled.
+ *
+ * Admin keeps track of blocks in a variable in the variable table
+ * called admin_toolbar. Each enabled block is stored like this:
+ * $admin_toolbar['blocks']['appui-delta'] = n;
+ *
+ * Remove then re-add all appui blocks. This way, old stuff
+ * doesn't hang around if a bunch of features get disabled.
+ */
+function appui_admin_toolbar($status) {
+  if (module_exists('admin') && ($status == 'enable' || $status == 'disable')) {
+    $admin_toolbar = variable_get('admin_toolbar', NULL);
+    // Check for existing FCP blocks on admin toolbar.
+    if (!empty($admin_toolbar['blocks'])) {
+      foreach ($admin_toolbar['blocks'] as $key => $value) {
+        $x = substr($key, 0, 13);
+        // Remove appui blocks.
+        if ($x == 'appui') {
+          unset($admin_toolbar['blocks'][$key]);
+        }
+      }
+    }
+    // Re-count appui blocks (deltas).
+    // There is one block per package (feature set).
+    $packages = appui_get_packages();
+    $count = count($packages);
+    if ($status == 'enable') {
+      for ($i = 0; $i < $count; $i++) {
+        $key = 'appui-' . $i;
+        $admin_toolbar['blocks'][$key] = 1;
+      }
+    }
+    else if ($status == 'disable') {
+      // Module being disables is still included in the
+      // delta count. Subtract one, otherwise Admin Toolbar
+      // keeps an extra, empty, block.
+      $count = $count - 1;
+      for ($i = 0; $i < $count; $i++) {
+        $key = 'appui-' . $i;
+        $admin_toolbar['blocks'][$key] = 1;
+      }
+    }
+    variable_set('admin_toolbar', $admin_toolbar);
+  }
+}
+
+/**
+ * Redirect users to path: admin/appui.
+ *
+ * This function is called after successful login.
+ */
+function appui_goto_appui() {
+  if (user_access('access features control panel')) {
+    drupal_goto('admin/appui');
+  }
+}
+
+//--------------------------------------------------/
+// Ctools plugin                                    /
+//--------------------------------------------------/
+/**
+ * Implmenentation of hook_ctools_plugin_directory.
+ */
+function appui_ctools_plugin_directory($module, $plugin) {
+  if ($plugin == 'export_ui') {
+    return 'plugins/' . $plugin;
+  }
+}
+
+/**
+ * Implements hook_ctools_plugin_api().
+ *
+ * Tell CTools that we support the default_mymodule_presets API.
+ */
+function appui_ctools_plugin_api($owner, $api) {
+  if ($owner == 'appui' && $api == 'default_appui_appcontrol') {
+    return array('version' => 1);
+  }
+}
+
+/**
+ * Implements hook_default_mymodule_myobj().
+ *
+ * Provide a couple of default presets.
+ *
+ * Note: This function name is defined in .install file,
+ *   'default hook' => 'default_mymodule_myobj',  // Function hook name.
+ */
+function appui_default_appui_appcontrol() {
+  $export = array();
+
+  $export = array();
+  $appcontrol = new stdClass;
+  $appcontrol->disabled = TRUE; /* Edit this to true to make a default appcontrol disabled initially */
+  $appcontrol->api_version = 1;
+  $appcontrol->package = 'example';
+  $appcontrol->title = 'This is an example';
+  $appcontrol->name = 'example';
+  $appcontrol->path = 'admin/example';
+  $appcontrol->query = 'x=y&a=b';
+  $appcontrol->description = 'This is an example control for the features control panel.';
+  $appcontrol->video_title = 'Instructional Video';
+  $appcontrol->video = '<embed>YouTube video here.</embed>';
+  $appcontrol->instructions_title = '3 Steps to Blah De Blah';
+  $appcontrol->instructions = 'Step 1. blee. Step 2. Blah. Step 3. Blo.';
+
+  $export['example'] = $appcontrol;
+  return $export;
+}
+
+
+//--------------------------------------------------/
+// Ctools export hooks                              /
+//--------------------------------------------------/
+
+/**
+ * Export a myobj and display it in a form.
+ *
+ * @param $name
+ *  string, unique id for object
+ */
+function appui_export_appcontrol($form, &$form_state, $name) {
+  ctools_include('export');
+  $obj = appui_appcontrol_load($name);
+  $title = $obj->description;
+  drupal_set_title($title);
+  $code = appui_appcontrol_export($obj);
+  $lines = substr_count($code, "\n");
+
+  $form['export'] = array(
+    '#title' => t('Export data'),
+    '#type' => 'textarea',
+    '#value' => $code,
+    '#rows' => $lines,
+    '#description' => t('Copy the export text and paste it into another myobj using the import function.'),
+  );
+  return $form;
+}
+
+/**
+ * Load a single myobj.
+ */
+function appui_appcontrol_load($name) {
+  ctools_include('export');
+  $result = ctools_export_load_object('appui_appcontrol', 'names', array($name));
+  if (isset($result[$name])) {
+    return $result[$name];
+  }
+}
+
+/**
+ * Export a myobj.
+ */
+function appui_appcontrol_export($obj, $indent = '') {
+  ctools_include('export');
+  $output = ctools_export_object('appui_appcontrol', $obj, $indent);
+  return $output;
+}
+
+/**
+ * Save a single myobj.
+ */
+function appui_appcontrol_save(&$myobj) {
+  $update = (isset($myobj->acid) && is_numeric($myobj->acid)) ? array('acid') : array();
+  return drupal_write_record('appui_appcontrol', $myobj, $update);
+}
