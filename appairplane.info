@@ -1,0 +1,4 @@
+name = "App Airplane"
+description = "Dropping app bombs on Drupal users for the betterment of humankind and websites everywhere."
+package = "App Airplane"
+core = 7.x
