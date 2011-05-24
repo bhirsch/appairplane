@@ -20,13 +20,6 @@ function appclient_menu() {
     'type' => MENU_LOCAL_TASK,
     'access arguments' => array(APPCLIENT_ACCESS_INSTALL),
   );
-  //$items['admin/appclient/enable'] = array(
-  //  'title' => 'Enable your App',
-  //  'page callback' => 'drupal_get_form',
-  //  'page arguments' => array('appclient_enable'),
-  //  'access arguments' => array(APPCLIENT_ACCESS_INSTALL),
-  //  'type' => MENU_CALLBACK,
-  //);
   return $items;
 }
 
@@ -80,7 +73,6 @@ function appclient_add_submit($form, &$form_state) {
     // 'os' => PHP_OS,
   );
   $options = array(
-    // 'headers' => array('Content-Type' => 'application/json'),
     'method' => 'POST',
     'data' => json_encode($data),
   );
@@ -107,11 +99,6 @@ function appclient_add_submit($form, &$form_state) {
     require $extract_directory . "/$appname.make";
     $primary = current($projects);
 
-    $manifest = array(
-      'project_mapper' => array('version' => '6.x-3.21'),
-      'views' => '7.x-4.1',
-      'context' => '',
-    );
     $local = update_get_projects();
     foreach ($projects as $project_name => $project) {
       $manifest_version = key($project);
@@ -140,59 +127,20 @@ function appclient_add_submit($form, &$form_state) {
     require_once DRUPAL_ROOT . '/includes/update.inc';
     if (update_get_update_list()) {
       drupal_set_message(t('Thanks for downloading a new app. Please update your database. After updating, please visit your Features Control Panel.'));
-      // Copy from temp to sites/all/modules
+      // We customize update.php to be friendlier. See hook_batch_alter().
       $form_state['redirect'] = 'update.php';
     }
-
-    // Redirect to Features control panel.
-
   }
   else {
     drupal_set_message('Unable to download your App. ***** TODO ******.', 'error');
   }
 }
 
-// Show move command for putting it in sites/all/modules
-// Offer an Enable button for enabling the app components
-// Redirect to features control panel.
-//function appclient_enable($form, &$form_state) {
-//  $tmp = drupal_realpath('temporary://appclient.zip');
-//  $dest = $_SERVER['DOCUMENT_ROOT'] . '/sites/all/modules/apps';
-//  $title = t('Move code into your Drupal site');
-//  if (is_windows()) {
-//    $items[] = t('Delete !dest', array('!dest' => $dest . '/APPNAME'));
-//    $items[] = t('Extract !archive to !dest.', array('!archive' => "$tmp/appclient.zip", '!dest' => $dest));
-//    $form['move_cli'] = array(
-//      '#title' => $title,
-//      '#theme' => 'item_list',
-//      '#items' => $items,
-//    );
-//  }
-//  else {
-//    $form['move_cli'] = array(
-//      '#title' => $title,
-//      '#type' => 'item',
-//      '#markup' => "<pre>
-//        rm -rf $dest/APPNAME
-//        tar -zxvf -C $dest $tmp
-//        </pre>",
-//    );
-//  }
-//
-//  $form['enable_title'] = array(
-//    '#title' => 'Enable App',
-//    '#type' => 'item',
-//    // '#markup' => 'Enable App',
-//  );
-//  $form['enable'] = array(
-//    // '#title' => 'Enable App',
-//    '#type' => 'submit',
-//    '#value' => t('Enable App (TODO - redirects to update.php)'),
-//  );
-//
-//  return $form;
-//}
-//
-//function is_windows() {
-//  return substr(PHP_OS, 0, 3) == 'WIN';
-//}
+/*
+ * Make sure we go to our control panel after update.php is run. Be nice.
+ */
+function appclient_batch_alter(&$batch) {
+  if ($batch['source_url'] == 'update.php') {
+    $batch['destination'] = 'admin/appui';
+  }
+}
