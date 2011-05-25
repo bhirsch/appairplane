@@ -81,7 +81,9 @@ function appclient_add_submit($form, &$form_state) {
   // TODO: More error handling.
   if ($return->code == 200) {
     $appname = $return->headers['x-fulfill-name'];
-    $tarball = 'temporary://appclient/' . "$appname.tar.gz";
+    $tmp_dir = 'temporary://appclient';
+    $success = file_prepare_directory($tmp_dir, FILE_CREATE_DIRECTORY);
+    $tarball = $tmp_dir . "/$appname.tar.gz";
     file_put_contents($tarball, $return->data);
 
     // Untar the app.
@@ -96,43 +98,58 @@ function appclient_add_submit($form, &$form_state) {
     }
 
 
-    require $extract_directory . "/$appname.make";
-    $primary = current($projects);
+    $make = file_get_contents($extract_directory . "/$appname/$appname.make");
+    $make = appclient_drush_make_parse_info_file($make);
+    // TODO: this assumes that the first listed project has a module of same name.
+    $primary = key($make['projects']);
 
+    // Make sure we always get current info about the local site.
+    _update_cache_clear('update_project_data');
     $local = update_get_projects();
-    foreach ($projects as $project_name => $project) {
-      $manifest_version = key($project);
-      if (isset($local[$project_name])) {
-        $local_version = $local[$project_name]['info']['version'];
+    foreach ($make['projects'] as $manifest_name => $manifest_version) {
+      // TODO: Figure out exactly where this fucker is in the modules dir. Assuming
+      // it is in sites/all/modules for now.
+      $target = drupal_realpath('./') . '/sites/all/modules/' . $manifest_name;
+      $source = drupal_realpath("$extract_directory/$appname/modules/$manifest_name");
+
+      if (isset($local[$manifest_name])) {
+        $local_version = $local[$manifest_name]['info']['version'];
         if ($manifest_version > $local_version) {
           // Clean out older versions of projects.
-          // TODO: Figure out where this fucker is in the modules dir
-          // TODO: handle unwritable case.
-          $target = drupal_realpath('./') . '/sites/all/modules/' . $project_name;
           if (file_exists($target)) {
             $removed = file_unmanaged_delete_recursive($target);
           }
-          $renamed = rename(drupal_realpath($extract_directory), $target);
+          $renamed = rename($source, $target);
         }
         else {
           // Skip since local is newer. Write to log.
         }
       }
+      else {
+        $renamed = rename($source, $target);
+      }
     }
 
-    // Enable primary module (a no-op) if this is already enabled
-    module_enable($primary);
+    // Enable primary module. Does more than just enable, so must run for updates too.
+    if (!module_enable(array($primary))) {
+      drupal_set_message(t('Unable to enable the %module module which is the primary module in the %appname App.', array('%module' => $primary, '%appname' => $appname)), 'error');
+      return;
+    }
 
 
     require_once DRUPAL_ROOT . '/includes/update.inc';
     if (update_get_update_list()) {
-      drupal_set_message(t('Thanks for downloading a new app. Please update your database. After updating, please visit your Features Control Panel.'));
+      drupal_set_message(t('Thanks for downloading %appname App. Please update your database. After updating, please visit your Features Control Panel.', array('%appname' => $appname)));
       // We customize update.php to be friendlier. See hook_batch_alter().
       $form_state['redirect'] = 'update.php';
     }
+    else {
+      drupal_set_message(t('%appname App successfully installed. Thanks for choosing App Airplane.', array('%appname' => $appname)));
+      $form_state['redirect'] = 'admin/appui';
+    }
   }
   else {
-    drupal_set_message('Unable to download your App. ***** TODO ******.', 'error');
+    drupal_set_message(t('Unable to download %appname App. Please try again later. If this error persists, please contact App Airplane.', array('%appname' => $appname)), 'error');
   }
 }
 
@@ -143,4 +160,63 @@ function appclient_batch_alter(&$batch) {
   if ($batch['source_url'] == 'update.php') {
     $batch['destination'] = 'admin/appui';
   }
+}
+
+function appclient_drush_make_parse_info_file($data) {
+  if (!$data) {
+    return FALSE;
+  }
+
+  if (preg_match_all('
+    @^\s*                           # Start at the beginning of a line, ignoring leading whitespace
+    ((?:
+      [^=;\[\]]|                    # Key names cannot contain equal signs, semi-colons or square brackets,
+      \[[^\[\]]*\]                  # unless they are balanced and not nested
+    )+?)
+    \s*=\s*                         # Key/value pairs are separated by equal signs (ignoring white-space)
+    (?:
+      ("(?:[^"]|(?<=\\\\)")*")|     # Double-quoted string, which may contain slash-escaped quotes/slashes
+      (\'(?:[^\']|(?<=\\\\)\')*\')| # Single-quoted string, which may contain slash-escaped quotes/slashes
+      ([^\r\n]*?)                   # Non-quoted string
+    )\s*$                           # Stop at the next end of a line, ignoring trailing whitespace
+    @msx', $data, $matches, PREG_SET_ORDER)) {
+    $info = array();
+    foreach ($matches as $match) {
+      // Fetch the key and value string
+      $i = 0;
+      foreach (array('key', 'value1', 'value2', 'value3') as $var) {
+        $$var = isset($match[++$i]) ? $match[$i] : '';
+      }
+      $value = stripslashes(substr($value1, 1, -1)) . stripslashes(substr($value2, 1, -1)) . $value3;
+
+      // Parse array syntax
+      $keys = preg_split('/\]?\[/', rtrim($key, ']'));
+      $last = array_pop($keys);
+      $parent = &$info;
+
+      // Create nested arrays
+      foreach ($keys as $key) {
+        if ($key == '') {
+          $key = count($parent);
+        }
+        if (!isset($parent[$key]) || !is_array($parent[$key])) {
+          $parent[$key] = array();
+        }
+        $parent = &$parent[$key];
+      }
+
+      // Handle PHP constants
+      if (defined($value)) {
+        $value = constant($value);
+      }
+
+      // Insert actual value
+      if ($last == '') {
+        $last = count($parent);
+      }
+      $parent[$last] = $value;
+    }
+    return $info;
+  }
+  return FALSE;
 }
